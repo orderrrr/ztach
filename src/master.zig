@@ -38,6 +38,13 @@ var the_pty: Pty = undefined;
 var client_buf: [MAX_CLIENTS]Client = undefined;
 var client_count: usize = 0;
 var sock_name_global: [*:0]const u8 = undefined;
+var last_push_resize_ms: i64 = 0;
+
+fn currentTimeMs() i64 {
+    var tv: std.c.timeval = undefined;
+    _ = std.c.gettimeofday(&tv, null);
+    return tv.sec * 1000 + @divTrunc(tv.usec, 1000);
+}
 
 // ioctl constants — platform-specific, cast to c_int via @bitCast for ioctl()
 const TIOCSWINSZ: c_int = switch (builtin.os.tag) {
@@ -342,12 +349,20 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
             if (pkt.len <= pkt.u.buf.len) {
                 proto.writeBufOrFail(the_pty.fd, pkt.u.buf[0..pkt.len]);
             }
-            // Interaction makes this client active — resize pty to match
+            // Resize pty to match this client if sizes differ.
+            // Cooldown prevents feedback loops: forceRedraw causes child
+            // output → other clients' terminals auto-respond (cursor
+            // position reports etc.) → those responses arrive as .push
+            // and would flip the size right back.
             const cws = client_buf[index].ws;
             if (cws.col > 0 and cws.row > 0 and
                 (cws.col != the_pty.ws.col or cws.row != the_pty.ws.row))
             {
-                forceRedraw(cws);
+                const now = currentTimeMs();
+                if (now - last_push_resize_ms > 500) {
+                    forceRedraw(cws);
+                    last_push_resize_ms = now;
+                }
             }
         },
         .attach => {

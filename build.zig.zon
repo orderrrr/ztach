@@ -1,6 +1,6 @@
 .{
     .name = .ztach,
-    .version = "0.2.1",
+    .version = "0.2.2",
     .fingerprint = 0xd5b148a1852e1efd,
     .minimum_zig_version = "0.14.0",
     .dependencies = .{},
