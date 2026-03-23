@@ -38,7 +38,6 @@ var the_pty: Pty = undefined;
 var client_buf: [MAX_CLIENTS]Client = undefined;
 var client_count: usize = 0;
 var sock_name_global: [*:0]const u8 = undefined;
-var active_client_fd: posix.fd_t = -1;
 
 // ioctl constants — platform-specific, cast to c_int via @bitCast for ioctl()
 const TIOCSWINSZ: c_int = switch (builtin.os.tag) {
@@ -97,12 +96,15 @@ fn removeClient(index: usize) void {
 }
 
 /// Set pty to the given client's size and notify all clients.
+/// "Last active wins" — whoever resized/attached last determines the pty size.
 fn setPtySize(ws: posix.winsize) void {
     if (ws.col == 0 or ws.row == 0) return;
 
     the_pty.ws = ws;
     _ = std.c.ioctl(the_pty.fd, TIOCSWINSZ, @intFromPtr(&the_pty.ws));
     killPty(posix.SIG.WINCH);
+
+    // Always notify all clients so they can update their viewports
     notifyAllClients();
 }
 
@@ -322,16 +324,6 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
             if (pkt.len <= pkt.u.buf.len) {
                 proto.writeBufOrFail(the_pty.fd, pkt.u.buf[0..pkt.len]);
             }
-            const client_fd = client_buf[index].fd;
-            if (client_fd != active_client_fd) {
-                active_client_fd = client_fd;
-                const cws = client_buf[index].ws;
-                if (cws.col > 0 and cws.row > 0 and
-                    (cws.col != the_pty.ws.col or cws.row != the_pty.ws.row))
-                {
-                    setPtySize(cws);
-                }
-            }
         },
         .attach => {
             client_buf[index].attached = true;
@@ -345,9 +337,7 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
         },
         .winch => {
             client_buf[index].ws = pkt.u.ws;
-            if (client_buf[index].fd == active_client_fd) {
-                setPtySize(pkt.u.ws);
-            }
+            setPtySize(pkt.u.ws);
         },
         .redraw => {
             var method: RedrawMethod = @enumFromInt(@as(u2, @truncate(pkt.len)));
