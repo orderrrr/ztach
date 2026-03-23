@@ -96,16 +96,34 @@ fn removeClient(index: usize) void {
 }
 
 /// Set pty to the given client's size and notify all clients.
-/// "Last active wins" — whoever resized/attached last determines the pty size.
 fn setPtySize(ws: posix.winsize) void {
     if (ws.col == 0 or ws.row == 0) return;
 
     the_pty.ws = ws;
     _ = std.c.ioctl(the_pty.fd, TIOCSWINSZ, @intFromPtr(&the_pty.ws));
     killPty(posix.SIG.WINCH);
-
-    // Always notify all clients so they can update their viewports
     notifyAllClients();
+}
+
+/// Force a full redraw by bouncing the pty through 1x1.
+/// The delay ensures the child handles the first SIGWINCH (real change)
+/// before the second one restores the correct size.
+fn forceRedraw(ws: posix.winsize) void {
+    if (ws.col == 0 or ws.row == 0) return;
+
+    // Shrink to 1x1 — guarantees a visible size change
+    var tiny: posix.winsize = std.mem.zeroes(posix.winsize);
+    tiny.col = 1;
+    tiny.row = 1;
+    _ = std.c.ioctl(the_pty.fd, TIOCSWINSZ, @intFromPtr(&tiny));
+    killPty(posix.SIG.WINCH);
+
+    // Let the child process the first SIGWINCH
+    const delay = std.c.timespec{ .sec = 0, .nsec = 5_000_000 }; // 5ms
+    _ = std.c.nanosleep(&delay, null);
+
+    // Restore real size — child redraws at correct dimensions
+    setPtySize(ws);
 }
 
 fn notifyAllClients() void {
@@ -323,6 +341,13 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
         .push => {
             if (pkt.len <= pkt.u.buf.len) {
                 proto.writeBufOrFail(the_pty.fd, pkt.u.buf[0..pkt.len]);
+            }
+            // Interaction makes this client active — resize pty to match
+            const cws = client_buf[index].ws;
+            if (cws.col > 0 and cws.row > 0 and
+                (cws.col != the_pty.ws.col or cws.row != the_pty.ws.row))
+            {
+                forceRedraw(cws);
             }
         },
         .attach => {
