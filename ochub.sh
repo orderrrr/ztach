@@ -184,7 +184,10 @@ cmd_create() {
     sock="$SOCK_DIR/$name.sock"
     echo "$PWD" > "$sock.path"
     branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) && echo "$branch" > "$sock.branch"
-    exec ztach -A "$sock" -r winch opencode "$@"
+    ztach -A "$sock" -r winch opencode "$@"
+    # Disable mouse tracking after detach — the app inside the pty
+    # enabled it, but ztach doesn't restore terminal state on detach.
+    printf '\033[?1006l\033[?1003l\033[?1000l'
 }
 
 cmd_list() {
