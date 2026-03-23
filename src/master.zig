@@ -106,27 +106,6 @@ fn setPtySize(ws: posix.winsize) void {
     notifyAllClients();
 }
 
-/// Force a full redraw by bouncing the pty through 1x1.
-/// The delay ensures the child handles the first SIGWINCH (real change)
-/// before the second one restores the correct size.
-fn forceRedraw(ws: posix.winsize) void {
-    if (ws.col == 0 or ws.row == 0) return;
-
-    // Shrink to 1x1 — guarantees a visible size change
-    var tiny: posix.winsize = std.mem.zeroes(posix.winsize);
-    tiny.col = 1;
-    tiny.row = 1;
-    _ = std.c.ioctl(the_pty.fd, TIOCSWINSZ, @intFromPtr(&tiny));
-    killPty(posix.SIG.WINCH);
-
-    // Let the child process the first SIGWINCH
-    const delay = std.c.timespec{ .sec = 0, .nsec = 5_000_000 }; // 5ms
-    _ = std.c.nanosleep(&delay, null);
-
-    // Restore real size — child redraws at correct dimensions
-    setPtySize(ws);
-}
-
 fn notifyAllClients() void {
     for (client_buf[0..client_count]) |client| {
         if (!client.attached) continue;
@@ -343,18 +322,14 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
             if (pkt.len <= pkt.u.buf.len) {
                 proto.writeBufOrFail(the_pty.fd, pkt.u.buf[0..pkt.len]);
             }
-            // Switch active client on non-escape input only.
-            // Mouse events, terminal auto-responses, and escape
-            // sequences all start with 0x1b — ignore those to
-            // prevent feedback loops from forceRedraw output.
             const client_fd = client_buf[index].fd;
-            if (client_fd != active_client_fd and pkt.u.buf[0] != 0x1b) {
+            if (client_fd != active_client_fd) {
                 active_client_fd = client_fd;
                 const cws = client_buf[index].ws;
                 if (cws.col > 0 and cws.row > 0 and
                     (cws.col != the_pty.ws.col or cws.row != the_pty.ws.row))
                 {
-                    forceRedraw(cws);
+                    setPtySize(cws);
                 }
             }
         },
@@ -370,7 +345,9 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
         },
         .winch => {
             client_buf[index].ws = pkt.u.ws;
-            setPtySize(pkt.u.ws);
+            if (client_buf[index].fd == active_client_fd) {
+                setPtySize(pkt.u.ws);
+            }
         },
         .redraw => {
             var method: RedrawMethod = @enumFromInt(@as(u2, @truncate(pkt.len)));
