@@ -629,9 +629,9 @@ pub fn attachMain(
                 pkt.len = @intCast(remaining);
                 processKbd(s, &pkt, no_suspend, detach_char, redraw_method);
 
-                // Non-escape input means the server just marked us active.
-                // Follow up with .winch so it resizes the PTY to our size.
-                // Stops naturally once too_small clears from the APC response.
+                // Non-escape input means the server just marked us
+                // active. Send .winch so it resizes the PTY to our
+                // size. Stops once too_small clears from the APC.
                 if (too_small and pkt.u.buf[0] != '\x1b') {
                     var wpkt = Packet.zeroed();
                     wpkt.type = .winch;

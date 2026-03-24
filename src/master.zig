@@ -112,17 +112,10 @@ fn setPtySize(ws: posix.winsize) void {
     notifyAllClients();
 }
 
-/// Send Ctrl-L to the pty to force a full screen repaint from the child app.
-/// Only sends when the child is in raw mode (no ECHO, no ICANON, VMIN=1),
-/// otherwise Ctrl-L would just be echoed as a literal character.
+/// Force a full screen repaint from the child app.
 fn forceRedraw(method: RedrawMethod) void {
     if (method == .ctrl_l) {
-        const LFlag = @typeInfo(posix.tc_lflag_t).@"struct".backing_integer.?;
-        const lflag = @as(LFlag, @bitCast(the_pty.term.lflag));
-        const echo_canon = @as(LFlag, @bitCast(posix.tc_lflag_t{ .ECHO = true, .ICANON = true }));
-        if ((lflag & echo_canon) == 0 and the_pty.term.cc[@intFromEnum(posix.V.MIN)] == 1) {
-            proto.writeBufOrFail(the_pty.fd, "\x0c");
-        }
+        proto.writeBufOrFail(the_pty.fd, "\x0c");
     } else if (method == .winch) {
         killPty(posix.SIG.WINCH);
     }
@@ -342,10 +335,8 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
     switch (pkt.type) {
         .push => {
             if (pkt.len <= pkt.u.buf.len) {
-                // Non-escape input marks this client as active (fallback for
-                // terminals without DECSET 1004 focus reporting).
-                // Terminal auto-responses (CPR, DA, mouse) start with \x1b
-                // and are ignored to prevent activation oscillation.
+                // Non-escape input marks this client as active.
+                // Terminal auto-responses start with \x1b and are ignored.
                 // The actual PTY resize is driven by the client sending
                 // .winch — activation only sets ownership.
                 if (pkt.len > 0 and pkt.u.buf[0] != '\x1b') {
