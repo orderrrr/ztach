@@ -122,9 +122,10 @@ fn setupViewport() void {
         return;
     }
 
-    // No longer too small — clear the overlay if it was showing
+    // No longer too small — clear the stale overlay
     if (too_small) {
         too_small = false;
+        proto.writeBufOrFail(posix.STDOUT_FILENO, "\x1b[H\x1b[2J");
     }
 
     // If our terminal matches the pty size exactly, no viewport needed
@@ -411,6 +412,15 @@ fn stripFocusEvents(s: posix.fd_t, buf: []u8, len: usize) usize {
             fpkt.type = .focus;
             fpkt.len = if (buf[read_pos + 2] == 'I') 1 else 0;
             proto.writePacketOrFail(s, &fpkt);
+
+            // On focus gained, follow up with .winch so the server can
+            // resize the PTY now that we own it.
+            if (buf[read_pos + 2] == 'I') {
+                fpkt.type = .winch;
+                _ = std.c.ioctl(posix.STDIN_FILENO, TIOCGWINSZ, @intFromPtr(&fpkt.u.ws));
+                proto.writePacketOrFail(s, &fpkt);
+            }
+
             read_pos += 3;
         } else {
             buf[write_pos] = buf[read_pos];
@@ -618,6 +628,16 @@ pub fn attachMain(
             if (remaining > 0) {
                 pkt.len = @intCast(remaining);
                 processKbd(s, &pkt, no_suspend, detach_char, redraw_method);
+
+                // Non-escape input means the server just marked us active.
+                // Follow up with .winch so it resizes the PTY to our size.
+                // Stops naturally once too_small clears from the APC response.
+                if (too_small and pkt.u.buf[0] != '\x1b') {
+                    var wpkt = Packet.zeroed();
+                    wpkt.type = .winch;
+                    _ = std.c.ioctl(posix.STDIN_FILENO, TIOCGWINSZ, @intFromPtr(&wpkt.u.ws));
+                    proto.writePacketOrFail(s, &wpkt);
+                }
             }
         }
     }
