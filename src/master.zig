@@ -61,8 +61,13 @@ fn unlinkSocket() callconv(.c) void {
     _ = std.c.unlink(sock_name_global);
 }
 
+fn masterExit(status: u8) noreturn {
+    unlinkSocket();
+    std.c._exit(status);
+}
+
 fn die(_: posix.SIG) callconv(.c) void {
-    std.c._exit(1);
+    masterExit(1);
 }
 
 fn dieChld(_: posix.SIG) callconv(.c) void {
@@ -253,17 +258,17 @@ fn ptyActivity(server_fd: posix.fd_t) void {
 
     const rrc = posix.read(the_pty.fd, &buf) catch {
         _ = std.c.waitpid(the_pty.pid, null, 0);
-        std.c._exit(1);
+        masterExit(1);
     };
     if (rrc == 0) {
         _ = std.c.waitpid(the_pty.pid, null, 0);
-        std.c._exit(1);
+        masterExit(1);
     }
     const len = rrc;
 
     // Get current terminal settings
     the_pty.term = posix.tcgetattr(the_pty.fd) catch {
-        std.c._exit(1);
+        masterExit(1);
     };
 
     // Fixed buffer for write-readiness poll
@@ -426,14 +431,14 @@ fn masterProcess(
     posix.sigaction(posix.SIG.HUP, &sa, null);
 
     initPty(argv, status_fd, orig_term, dont_have_tty) catch {
-        std.c._exit(1);
+        masterExit(1);
     };
 
     if (status_fd >= 0) _ = std.c.close(status_fd);
 
     // Redirect stdio to /dev/null
     const null_fd = posix.openat(posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR }, 0) catch {
-        std.c._exit(1);
+        masterExit(1);
     };
     _ = std.c.dup2(null_fd, posix.STDIN_FILENO);
     _ = std.c.dup2(null_fd, posix.STDOUT_FILENO);
@@ -478,7 +483,7 @@ fn masterProcess(
         }
 
         _ = posix.poll(poll_fds[0..n_fds], -1) catch {
-            std.c._exit(1);
+            masterExit(1);
         };
 
         if (poll_fds[0].revents & posix.POLL.IN != 0) {
