@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.14.0"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build macOS arm64
+        run: zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSafe
+
+      - name: Package arm64
+        run: |
+          tar -czf ztach-${{ steps.version.outputs.version }}-macos-arm64.tar.gz -C zig-out/bin ztach
+          shasum -a 256 ztach-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+
+      - name: Build macOS x86_64
+        run: |
+          rm -rf zig-out
+          zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe
+
+      - name: Package x86_64
+        run: |
+          tar -czf ztach-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz -C zig-out/bin ztach
+          shasum -a 256 ztach-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz
+
+      - name: Create GitHub Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ztach-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+            ztach-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz
+          generate_release_notes: true
+
+      - name: Compute SHA256 sums
+        id: sha
+        run: |
+          echo "arm64=$(shasum -a 256 ztach-${{ steps.version.outputs.version }}-macos-arm64.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "x86_64=$(shasum -a 256 ztach-${{ steps.version.outputs.version }}-macos-x86_64.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA_ARM64="${{ steps.sha.outputs.arm64 }}"
+          SHA_X86="${{ steps.sha.outputs.x86_64 }}"
+
+          cat > /tmp/ztach.rb <<EOF
+          class Ztach < Formula
+            desc "Terminal session multiplexer with viewport support"
+            homepage "https://github.com/orderrrr/ztach"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/orderrrr/ztach/releases/download/v${VERSION}/ztach-${VERSION}-macos-arm64.tar.gz"
+                sha256 "${SHA_ARM64}"
+              else
+                url "https://github.com/orderrrr/ztach/releases/download/v${VERSION}/ztach-${VERSION}-macos-x86_64.tar.gz"
+                sha256 "${SHA_X86}"
+              end
+            end
+
+            def install
+              bin.install "ztach"
+            end
+
+            test do
+              assert_match "ztach - version", shell_output("#{bin}/ztach --version")
+            end
+          end
+          EOF
+
+          # Remove leading whitespace from heredoc
+          sed -i '' 's/^          //' /tmp/ztach.rb
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/orderrrr/homebrew-ztach.git" /tmp/homebrew-ztach
+          cp /tmp/ztach.rb /tmp/homebrew-ztach/Formula/ztach.rb
+          cd /tmp/homebrew-ztach
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/ztach.rb
+          git commit -m "ztach ${VERSION}"
+          git push

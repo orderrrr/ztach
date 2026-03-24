@@ -3,7 +3,7 @@ const posix = std.posix;
 
 pub const BUFSIZE: usize = 4096;
 pub const EOS = "\x1b[999H";
-pub const VERSION = "0.3.0";
+pub const VERSION = @import("version").string;
 
 pub const MessageType = enum(u8) {
     push = 0,

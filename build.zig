@@ -1,8 +1,12 @@
 const std = @import("std");
+const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const version = b.addOptions();
+    version.addOption([]const u8, "string", zon.version);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -10,6 +14,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    exe_mod.addOptions("version", version);
 
     const exe = b.addExecutable(.{
         .name = "ztach",
