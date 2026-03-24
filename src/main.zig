@@ -159,10 +159,13 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     }
 
     // Save original terminal settings
-    orig_term = posix.tcgetattr(posix.STDIN_FILENO) catch blk: {
+    var raw_term: std.c.termios = undefined;
+    if (std.c.tcgetattr(posix.STDIN_FILENO, &raw_term) == 0) {
+        orig_term = @bitCast(raw_term);
+    } else {
         dont_have_tty = true;
-        break :blk std.mem.zeroes(posix.termios);
-    };
+        orig_term = std.mem.zeroes(posix.termios);
+    }
 
     if (dont_have_tty and mode != 'n' and mode != 'N') {
         writeStderr("ztach: Attaching to a session requires a terminal.\n");
