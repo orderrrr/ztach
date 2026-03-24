@@ -2,7 +2,7 @@
     .name = .ztach,
     .version = "0.3.1",
     .fingerprint = 0xd5b148a1852e1efd,
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.14.1",
     .dependencies = .{},
     .paths = .{
         "build.zig",

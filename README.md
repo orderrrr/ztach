@@ -23,7 +23,7 @@ brew install ztach
 
 ### From source
 
-Requires [Zig](https://ziglang.org/) 0.14+:
+Requires [Zig](https://ziglang.org/) master (0.14.1+):
 
 ```bash
 git clone https://github.com/orderrrr/ztach.git
