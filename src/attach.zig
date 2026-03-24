@@ -6,8 +6,6 @@ const proto = @import("protocol.zig");
 const Packet = proto.Packet;
 const RedrawMethod = proto.RedrawMethod;
 
-extern "c" fn atexit(func: *const fn () callconv(.c) void) c_int;
-
 const TIOCGWINSZ: c_int = switch (builtin.os.tag) {
     .macos => @bitCast(@as(c_uint, 0x40087468)),
     .linux => 0x5413,
@@ -41,10 +39,7 @@ fn restoreTerm() callconv(.c) void {
 }
 
 fn die(sig: posix.SIG) callconv(.c) void {
-    if (viewport_active) {
-        const reset = "\x1b[?6l\x1b[?69l\x1b[r";
-        _ = std.c.write(posix.STDOUT_FILENO, reset.ptr, reset.len);
-    }
+    restoreTerm();
     if (sig == posix.SIG.HUP or sig == posix.SIG.INT) {
         const msg = proto.EOS ++ "\r\n[detached]\r\n";
         _ = std.c.write(posix.STDOUT_FILENO, msg.ptr, msg.len);
@@ -425,7 +420,7 @@ fn processKbd(
     }
 
     if (detach_char >= 0 and pkt.u.buf[0] == @as(u8, @intCast(@as(u32, @bitCast(detach_char))))) {
-        if (viewport_active) teardownViewport();
+        restoreTerm();
         const msg = proto.EOS ++ "\r\n[detached]\r\n";
         _ = std.c.write(posix.STDOUT_FILENO, msg.ptr, msg.len);
         std.c._exit(0);
@@ -457,7 +452,6 @@ pub fn attachMain(
     };
 
     cur_term = orig_term.*;
-    _ = atexit(restoreTerm);
 
     // Signal handlers
     var sa: posix.Sigaction = std.mem.zeroes(posix.Sigaction);
@@ -541,6 +535,7 @@ pub fn attachMain(
         if (poll_rc < 0) {
             // EINTR from SIGWINCH — fall through to check win_changed
             if (std.c.errno(poll_rc) != .INTR) {
+                restoreTerm();
                 const msg = proto.EOS ++ "\r\n[poll failed]\r\n";
                 _ = std.c.write(posix.STDOUT_FILENO, msg.ptr, msg.len);
                 std.c._exit(1);
@@ -561,12 +556,13 @@ pub fn attachMain(
         if (poll_fds[1].revents & std.c.POLL.IN != 0) {
             var buf: [proto.BUFSIZE]u8 = undefined;
             const len = posix.read(s, &buf) catch {
+                restoreTerm();
                 const msg = proto.EOS ++ "\r\n[read error]\r\n";
                 _ = std.c.write(posix.STDOUT_FILENO, msg.ptr, msg.len);
                 std.c._exit(1);
             };
             if (len == 0) {
-                if (viewport_active) teardownViewport();
+                restoreTerm();
                 const msg = proto.EOS ++ "\r\n[EOF - ztach terminating]\r\n";
                 _ = std.c.write(posix.STDOUT_FILENO, msg.ptr, msg.len);
                 std.c._exit(0);
@@ -579,9 +575,13 @@ pub fn attachMain(
             pkt.type = .push;
             @memset(&pkt.u.buf, 0);
             const len = posix.read(posix.STDIN_FILENO, &pkt.u.buf) catch {
+                restoreTerm();
                 std.c._exit(1);
             };
-            if (len == 0) std.c._exit(1);
+            if (len == 0) {
+                restoreTerm();
+                std.c._exit(1);
+            }
             pkt.len = @intCast(len);
             processKbd(s, &pkt, no_suspend, detach_char, redraw_method);
         }
