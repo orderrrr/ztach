@@ -38,6 +38,7 @@ var the_pty: Pty = undefined;
 var client_buf: [MAX_CLIENTS]Client = undefined;
 var client_count: usize = 0;
 var sock_name_global: [*:0]const u8 = undefined;
+var active_client_fd: posix.fd_t = -1;
 
 // ioctl constants — platform-specific, cast to c_int via @bitCast for ioctl()
 const TIOCSWINSZ: c_int = switch (builtin.os.tag) {
@@ -90,6 +91,9 @@ fn addClient(fd: posix.fd_t) void {
 }
 
 fn removeClient(index: usize) void {
+    if (client_buf[index].fd == active_client_fd) {
+        active_client_fd = -1;
+    }
     _ = std.c.close(client_buf[index].fd);
     client_buf[index] = client_buf[client_count - 1];
     client_count -= 1;
@@ -337,14 +341,18 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
         },
         .winch => {
             client_buf[index].ws = pkt.u.ws;
-            setPtySize(pkt.u.ws);
+            if (active_client_fd == -1 or client_buf[index].fd == active_client_fd) {
+                setPtySize(pkt.u.ws);
+            }
         },
         .redraw => {
             var method: RedrawMethod = @enumFromInt(@as(u2, @truncate(pkt.len)));
             if (method == .unspec) method = redraw;
 
             client_buf[index].ws = pkt.u.ws;
-            setPtySize(pkt.u.ws);
+            if (active_client_fd == -1 or client_buf[index].fd == active_client_fd) {
+                setPtySize(pkt.u.ws);
+            }
 
             if (method == .ctrl_l) {
                 const LFlag = @typeInfo(posix.tc_lflag_t).@"struct".backing_integer.?;
@@ -355,6 +363,21 @@ fn clientActivity(index: usize, redraw: RedrawMethod) bool {
                 }
             } else if (method == .winch) {
                 killPty(posix.SIG.WINCH);
+            }
+        },
+        .focus => {
+            if (pkt.len == 1) {
+                // Focus gained — this client becomes active
+                active_client_fd = client_buf[index].fd;
+                // Apply this client's stored size now that it has focus
+                if (client_buf[index].ws.col > 0 and client_buf[index].ws.row > 0) {
+                    setPtySize(client_buf[index].ws);
+                }
+            } else {
+                // Focus lost — clear active if this was the active client
+                if (active_client_fd == client_buf[index].fd) {
+                    active_client_fd = -1;
+                }
             }
         },
     }

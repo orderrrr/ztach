@@ -25,6 +25,9 @@ var viewport_active: bool = false;
 var too_small: bool = false;
 
 fn restoreTerm() callconv(.c) void {
+    // Disable focus reporting
+    const focus_off = "\x1b[?1004l";
+    _ = std.c.write(posix.STDOUT_FILENO, focus_off.ptr, focus_off.len);
     // Reset VT100 margins and origin mode before restoring terminal
     if (viewport_active) {
         const reset = "\x1b[?6l" ++ // disable origin mode
@@ -390,6 +393,34 @@ fn processSocketData(data: []const u8) void {
     }
 }
 
+/// Scan buf[0..len] for focus event sequences (\x1b[I and \x1b[O).
+/// For each found, send a .focus packet to the master. Strip the 3-byte
+/// sequences from the buffer and return the remaining length.
+fn stripFocusEvents(s: posix.fd_t, buf: []u8, len: usize) usize {
+    if (len < 3) return len;
+
+    var read_pos: usize = 0;
+    var write_pos: usize = 0;
+
+    while (read_pos < len) {
+        if (read_pos + 2 < len and buf[read_pos] == '\x1b' and buf[read_pos + 1] == '[' and
+            (buf[read_pos + 2] == 'I' or buf[read_pos + 2] == 'O'))
+        {
+            // Send .focus packet: len=1 for gained (I), len=0 for lost (O)
+            var fpkt = Packet.zeroed();
+            fpkt.type = .focus;
+            fpkt.len = if (buf[read_pos + 2] == 'I') 1 else 0;
+            proto.writePacketOrFail(s, &fpkt);
+            read_pos += 3;
+        } else {
+            buf[write_pos] = buf[read_pos];
+            write_pos += 1;
+            read_pos += 1;
+        }
+    }
+    return write_pos;
+}
+
 fn processKbd(
     s: posix.fd_t,
     pkt: *Packet,
@@ -505,8 +536,8 @@ pub fn attachMain(
     cur_term.cc[@intFromEnum(posix.V.TIME)] = 0;
     posix.tcsetattr(posix.STDIN_FILENO, .DRAIN, cur_term) catch {};
 
-    // Clear screen
-    proto.writeBufOrFail(posix.STDOUT_FILENO, "\x1b[H\x1b[2J");
+    // Clear screen and enable focus reporting (DECSET 1004)
+    proto.writeBufOrFail(posix.STDOUT_FILENO, "\x1b[H\x1b[2J\x1b[?1004h");
 
     // Get initial terminal size
     getTermSize();
@@ -570,7 +601,7 @@ pub fn attachMain(
             processSocketData(buf[0..len]);
         }
 
-        // Stdin activity (keyboard)
+        // Stdin activity (keyboard + focus events)
         if (poll_fds[0].revents & std.c.POLL.IN != 0) {
             pkt.type = .push;
             @memset(&pkt.u.buf, 0);
@@ -582,8 +613,12 @@ pub fn attachMain(
                 restoreTerm();
                 std.c._exit(1);
             }
-            pkt.len = @intCast(len);
-            processKbd(s, &pkt, no_suspend, detach_char, redraw_method);
+            // Strip focus events (\x1b[I / \x1b[O) and send .focus packets
+            const remaining = stripFocusEvents(s, &pkt.u.buf, len);
+            if (remaining > 0) {
+                pkt.len = @intCast(remaining);
+                processKbd(s, &pkt, no_suspend, detach_char, redraw_method);
+            }
         }
     }
     return 0;

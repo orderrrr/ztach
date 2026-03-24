@@ -3,7 +3,7 @@ const posix = std.posix;
 
 pub const BUFSIZE: usize = 4096;
 pub const EOS = "\x1b[999H";
-pub const VERSION = "0.2.6";
+pub const VERSION = "0.3.0";
 
 pub const MessageType = enum(u8) {
     push = 0,
@@ -11,6 +11,7 @@ pub const MessageType = enum(u8) {
     detach = 2,
     winch = 3,
     redraw = 4,
+    focus = 5,
 };
 
 pub const RedrawMethod = enum(u8) {
