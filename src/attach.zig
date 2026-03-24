@@ -64,7 +64,7 @@ fn connectSocket(name: [:0]const u8) !posix.fd_t {
 
     const s = std.c.socket(std.c.AF.UNIX, std.c.SOCK.STREAM, 0);
     if (s < 0) return error.SocketFailed;
-    errdefer posix.close(s);
+    errdefer _ = std.c.close(s);
 
     var addr: std.c.sockaddr.un = std.mem.zeroes(std.c.sockaddr.un);
     addr.family = std.c.AF.UNIX;

@@ -78,7 +78,7 @@ fn setNonBlocking(fd: posix.fd_t) !void {
 
 fn addClient(fd: posix.fd_t) void {
     if (client_count >= MAX_CLIENTS) {
-        posix.close(fd);
+        _ = std.c.close(fd);
         return;
     }
     client_buf[client_count] = .{
@@ -90,7 +90,7 @@ fn addClient(fd: posix.fd_t) void {
 }
 
 fn removeClient(index: usize) void {
-    posix.close(client_buf[index].fd);
+    _ = std.c.close(client_buf[index].fd);
     client_buf[index] = client_buf[client_count - 1];
     client_count -= 1;
 }
@@ -182,7 +182,7 @@ fn createSocket(name: [:0]const u8) !posix.fd_t {
         _ = std.c.umask(old_umask);
         return error.SocketFailed;
     }
-    errdefer posix.close(s);
+    errdefer _ = std.c.close(s);
 
     const sa = buildSockAddr(name);
     var rc = std.c.bind(s, @ptrCast(&sa.addr), sa.len);
@@ -191,7 +191,7 @@ fn createSocket(name: [:0]const u8) !posix.fd_t {
         const probe = std.c.socket(std.c.AF.UNIX, std.c.SOCK.STREAM, 0);
         if (probe >= 0) {
             const crc = std.c.connect(probe, @ptrCast(&sa.addr), sa.len);
-            posix.close(probe);
+            _ = std.c.close(probe);
             if (crc < 0) {
                 // Connection refused = stale socket, unlink and retry
                 _ = std.c.unlink(name.ptr);
@@ -296,7 +296,7 @@ fn controlActivity(server_fd: posix.fd_t) void {
     const fd = std.c.accept(server_fd, null, null);
     if (fd < 0) return;
     setNonBlocking(fd) catch {
-        posix.close(fd);
+        _ = std.c.close(fd);
         return;
     };
     addClient(fd);
@@ -392,7 +392,7 @@ fn masterProcess(
         std.c._exit(1);
     };
 
-    if (status_fd >= 0) posix.close(status_fd);
+    if (status_fd >= 0) _ = std.c.close(status_fd);
 
     // Redirect stdio to /dev/null
     const null_fd = posix.openat(posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .RDWR }, 0) catch {
@@ -401,7 +401,7 @@ fn masterProcess(
     _ = std.c.dup2(null_fd, posix.STDIN_FILENO);
     _ = std.c.dup2(null_fd, posix.STDOUT_FILENO);
     _ = std.c.dup2(null_fd, posix.STDERR_FILENO);
-    if (null_fd > 2) posix.close(null_fd);
+    if (null_fd > 2) _ = std.c.close(null_fd);
 
     client_count = 0;
     var waiting = wait_attach;
@@ -494,7 +494,7 @@ pub fn masterMain(
         if (status_fd >= 0) {
             const rc = std.c.fcntl(status_fd, std.c.F.SETFD, @as(c_uint, posix.FD_CLOEXEC));
             if (rc < 0) {
-                posix.close(status_fd);
+                _ = std.c.close(status_fd);
                 status_fd = -1;
             }
         }
@@ -518,26 +518,26 @@ pub fn masterMain(
 
     if (pid == 0) {
         // Child becomes master
-        if (pipe_fds[0] >= 0) posix.close(pipe_fds[0]);
+        if (pipe_fds[0] >= 0) _ = std.c.close(pipe_fds[0]);
         masterProcess(s, argv, wait_attach, pipe_fds[1], orig_term, dont_have_tty, redraw_method.*);
         std.c._exit(0);
     }
 
     // Parent: check for exec errors via pipe
     if (pipe_fds[0] >= 0) {
-        posix.close(pipe_fds[1]);
+        _ = std.c.close(pipe_fds[1]);
         var err_buf: [1024]u8 = undefined;
         while (true) {
             const n = posix.read(pipe_fds[0], &err_buf) catch break;
             if (n == 0) break;
             proto.writeBufOrFail(posix.STDERR_FILENO, err_buf[0..n]);
             _ = std.c.kill(pid, posix.SIG.TERM);
-            posix.close(pipe_fds[0]);
+            _ = std.c.close(pipe_fds[0]);
             return 1;
         }
-        posix.close(pipe_fds[0]);
+        _ = std.c.close(pipe_fds[0]);
     }
 
-    posix.close(s);
+    _ = std.c.close(s);
     return 0;
 }
